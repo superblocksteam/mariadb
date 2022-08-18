@@ -7,7 +7,8 @@ import {
   IntegrationError,
   RawRequest,
   Table,
-  TableType
+  TableType,
+  ResolvedActionConfigurationProperty
 } from '@superblocksteam/shared';
 import {
   ActionConfigurationResolutionContext,
@@ -31,7 +32,7 @@ export default class MariaDBPlugin extends BasePlugin {
     property,
     escapeStrings
   }: // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ActionConfigurationResolutionContext): Promise<string | any[]> {
+  ActionConfigurationResolutionContext): Promise<ResolvedActionConfigurationProperty> {
     return resolveActionConfigurationPropertyUtil(
       super.resolveActionConfigurationProperty,
       {
