@@ -12,17 +12,19 @@ import {
 } from '@superblocksteam/shared';
 import {
   ActionConfigurationResolutionContext,
-  BasePlugin,
+  DatabasePlugin,
   normalizeTableColumnNames,
   PluginExecutionProps,
-  resolveActionConfigurationPropertyUtil
+  resolveActionConfigurationPropertyUtil,
+  CreateConnection,
+  DestroyConnection
 } from '@superblocksteam/shared-backend';
 import { isEmpty } from 'lodash';
 import { Connection, createConnection } from 'mariadb';
 
 const TEST_CONNECTION_TIMEOUT = 5000;
 
-export default class MariaDBPlugin extends BasePlugin {
+export default class MariaDBPlugin extends DatabasePlugin {
   pluginName = 'MariaDB';
 
   async resolveActionConfigurationProperty({
@@ -33,16 +35,24 @@ export default class MariaDBPlugin extends BasePlugin {
     escapeStrings
   }: // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ActionConfigurationResolutionContext): Promise<ResolvedActionConfigurationProperty> {
-    return resolveActionConfigurationPropertyUtil(
-      super.resolveActionConfigurationProperty,
-      {
-        context,
-        actionConfiguration,
-        files,
-        property,
-        escapeStrings
-      },
-      false /* useOrderedParameters */
+    return this.tracer.startActiveSpan(
+      'plugin.resolveActionConfigurationProperty',
+      { attributes: this.getTraceTags(), kind: 1 /* SpanKind.SERVER */ },
+      async (span) => {
+        const resolvedActionConfigurationProperty = resolveActionConfigurationPropertyUtil(
+          super.resolveActionConfigurationProperty,
+          {
+            context,
+            actionConfiguration,
+            files,
+            property,
+            escapeStrings
+          },
+          false /* useOrderedParameters */
+        );
+        span.end();
+        return resolvedActionConfigurationProperty;
+      }
     );
   }
 
@@ -54,19 +64,21 @@ export default class MariaDBPlugin extends BasePlugin {
     const connection = await this.createConnection(datasourceConfiguration);
     try {
       const query = actionConfiguration.body;
-
       const ret = new ExecutionOutput();
       if (!query || isEmpty(query)) {
         return ret;
       }
-      const rows = await connection.query(query, context.preparedStatementContext);
+      const rows = (await this.executeQuery(() => {
+        return connection.query(query, context.preparedStatementContext);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      })) as Record<string, any>;
       ret.output = normalizeTableColumnNames(rows);
       return ret;
     } catch (err) {
       throw new IntegrationError(`${this.pluginName} query failed, ${err.message}`);
     } finally {
       if (connection) {
-        await connection.end();
+        this.destroyConnection(connection);
       }
     }
   }
@@ -80,10 +92,8 @@ export default class MariaDBPlugin extends BasePlugin {
   }
 
   async metadata(datasourceConfiguration: MariaDBDatasourceConfiguration): Promise<DatasourceMetadataDto> {
-    let connection: Connection | undefined;
+    const connection = await this.createConnection(datasourceConfiguration);
     try {
-      connection = await this.createConnection(datasourceConfiguration);
-
       const tableQuery =
         'select COLUMN_NAME as name,' +
         '       TABLE_NAME as table_name,' +
@@ -91,7 +101,10 @@ export default class MariaDBPlugin extends BasePlugin {
         ' from information_schema.columns' +
         ' where table_schema = database()' +
         ' order by table_name, ordinal_position';
-      const tableResult = await connection.query(tableQuery);
+
+      const tableResult = await this.executeQuery(() => {
+        return connection.query(tableQuery);
+      });
 
       const entities = tableResult.reduce((acc, attribute) => {
         const entityName = attribute.table_name;
@@ -109,7 +122,6 @@ export default class MariaDBPlugin extends BasePlugin {
 
         return [...acc, table];
       }, []);
-
       return {
         dbSchema: { tables: entities }
       };
@@ -117,11 +129,17 @@ export default class MariaDBPlugin extends BasePlugin {
       throw new IntegrationError(`Failed to connect to ${this.pluginName}, ${err.message}`);
     } finally {
       if (connection) {
-        await connection.end();
+        this.destroyConnection(connection);
       }
     }
   }
 
+  @DestroyConnection
+  private async destroyConnection(connection: Connection): Promise<void> {
+    await connection.end();
+  }
+
+  @CreateConnection
   private async createConnection(
     datasourceConfiguration: MariaDBDatasourceConfiguration,
     connectionTimeoutMillis = 30000
@@ -179,15 +197,16 @@ export default class MariaDBPlugin extends BasePlugin {
   }
 
   async test(datasourceConfiguration: MariaDBDatasourceConfiguration): Promise<void> {
-    let connection: Connection | null = null;
+    const connection = await this.createConnection(datasourceConfiguration, TEST_CONNECTION_TIMEOUT);
     try {
-      connection = await this.createConnection(datasourceConfiguration, TEST_CONNECTION_TIMEOUT);
-      await connection.query('SELECT NOW()');
+      await this.executeQuery(() => {
+        return connection.query('SELECT NOW()');
+      });
     } catch (err) {
       throw new IntegrationError(`Test ${this.pluginName} connection failed, ${err.message}`);
     } finally {
       if (connection) {
-        await connection.end();
+        this.destroyConnection(connection);
       }
     }
   }
