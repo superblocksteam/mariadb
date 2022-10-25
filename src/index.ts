@@ -7,15 +7,12 @@ import {
   IntegrationError,
   RawRequest,
   Table,
-  TableType,
-  ResolvedActionConfigurationProperty
+  TableType
 } from '@superblocksteam/shared';
 import {
-  ActionConfigurationResolutionContext,
   DatabasePlugin,
   normalizeTableColumnNames,
   PluginExecutionProps,
-  resolveActionConfigurationPropertyUtil,
   CreateConnection,
   DestroyConnection
 } from '@superblocksteam/shared-backend';
@@ -27,33 +24,8 @@ const TEST_CONNECTION_TIMEOUT = 5000;
 export default class MariaDBPlugin extends DatabasePlugin {
   pluginName = 'MariaDB';
 
-  async resolveActionConfigurationProperty({
-    context,
-    actionConfiguration,
-    files,
-    property,
-    escapeStrings
-  }: // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ActionConfigurationResolutionContext): Promise<ResolvedActionConfigurationProperty> {
-    return this.tracer.startActiveSpan(
-      'plugin.resolveActionConfigurationProperty',
-      { attributes: this.getTraceTags(), kind: 1 /* SpanKind.SERVER */ },
-      async (span) => {
-        const resolvedActionConfigurationProperty = resolveActionConfigurationPropertyUtil(
-          super.resolveActionConfigurationProperty,
-          {
-            context,
-            actionConfiguration,
-            files,
-            property,
-            escapeStrings
-          },
-          false /* useOrderedParameters */
-        );
-        span.end();
-        return resolvedActionConfigurationProperty;
-      }
-    );
+  constructor() {
+    super({ useOrderedParameters: false });
   }
 
   async execute({
@@ -78,7 +50,9 @@ export default class MariaDBPlugin extends DatabasePlugin {
       throw new IntegrationError(`${this.pluginName} query failed, ${err.message}`);
     } finally {
       if (connection) {
-        this.destroyConnection(connection);
+        this.destroyConnection(connection).catch(() => {
+          // Error handling is done in the decorator
+        });
       }
     }
   }
@@ -129,13 +103,15 @@ export default class MariaDBPlugin extends DatabasePlugin {
       throw new IntegrationError(`Failed to connect to ${this.pluginName}, ${err.message}`);
     } finally {
       if (connection) {
-        this.destroyConnection(connection);
+        this.destroyConnection(connection).catch(() => {
+          // Error handling is done in the decorator
+        });
       }
     }
   }
 
   @DestroyConnection
-  private async destroyConnection(connection: Connection): Promise<void> {
+  private async destroyConnection(connection: Connection) {
     await connection.end();
   }
 
@@ -206,7 +182,9 @@ export default class MariaDBPlugin extends DatabasePlugin {
       throw new IntegrationError(`Test ${this.pluginName} connection failed, ${err.message}`);
     } finally {
       if (connection) {
-        this.destroyConnection(connection);
+        this.destroyConnection(connection).catch(() => {
+          // Error handling is done in the destroy connection decorator
+        });
       }
     }
   }
