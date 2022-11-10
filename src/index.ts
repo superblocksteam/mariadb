@@ -10,7 +10,7 @@ import {
   TableType
 } from '@superblocksteam/shared';
 import {
-  DatabasePlugin,
+  DatabasePluginPooled,
   normalizeTableColumnNames,
   PluginExecutionProps,
   CreateConnection,
@@ -21,19 +21,14 @@ import { Connection, createConnection } from 'mariadb';
 
 const TEST_CONNECTION_TIMEOUT = 5000;
 
-export default class MariaDBPlugin extends DatabasePlugin {
+export default class MariaDBPlugin extends DatabasePluginPooled<Connection, MariaDBDatasourceConfiguration> {
   pluginName = 'MariaDB';
+  protected readonly useOrderedParameters = false;
 
-  constructor() {
-    super({ useOrderedParameters: false });
-  }
-
-  async execute({
-    context,
-    datasourceConfiguration,
-    actionConfiguration
-  }: PluginExecutionProps<MariaDBDatasourceConfiguration>): Promise<ExecutionOutput> {
-    const connection = await this.createConnection(datasourceConfiguration);
+  async executePooled(
+    { context, actionConfiguration }: PluginExecutionProps<MariaDBDatasourceConfiguration>,
+    connection: Connection
+  ): Promise<ExecutionOutput> {
     try {
       const query = actionConfiguration.body;
       const ret = new ExecutionOutput();
@@ -48,12 +43,6 @@ export default class MariaDBPlugin extends DatabasePlugin {
       return ret;
     } catch (err) {
       throw new IntegrationError(`${this.pluginName} query failed, ${err.message}`);
-    } finally {
-      if (connection) {
-        this.destroyConnection(connection).catch(() => {
-          // Error handling is done in the decorator
-        });
-      }
     }
   }
 
@@ -111,12 +100,12 @@ export default class MariaDBPlugin extends DatabasePlugin {
   }
 
   @DestroyConnection
-  private async destroyConnection(connection: Connection) {
+  protected async destroyConnection(connection: Connection): Promise<void> {
     await connection.end();
   }
 
   @CreateConnection
-  private async createConnection(
+  protected async createConnection(
     datasourceConfiguration: MariaDBDatasourceConfiguration,
     connectionTimeoutMillis = 30000
   ): Promise<Connection> {
